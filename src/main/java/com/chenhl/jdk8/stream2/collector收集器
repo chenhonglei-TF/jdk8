@@ -1,0 +1,49 @@
+1. Collector:是一个接口，我们称之为收集器。
+2. Collector<T, A, R>是一个可变的汇聚操作，将输入元素累积到一个可变的结果容器中，在所有的元素都处理完毕之后，将累积的结果转换为一个最终的表示（这是一个可选的操作）。
+它支持串行和并行两种方式执行。T:流中元素类型， A:结果容器类型， R 最终返回的结果类型。
+3. Collectors提供了关于Collector的常见汇聚实现，Collectors本身实际上是一个工厂。
+4. 一个Collector是由四个函数来协同工作来将输入元素汇聚到一个可变的结果容器中，并且可选的执行一个最终的转换。
+    4.1 新的结果容器的创建 --Supplier<A> supplier() 创建并返回一个新的可变的结果容器
+    4.2 将一个新的数据元素给合并到一个结果容器中 --BiConsumer<A, T> accumulator() 累加器，将一个元素累加到一个可变结果容器中
+    4.3 将两个结果容器合并到一个结果容器中 --BinaryOperator<A> combiner() 合并器 合并两个部分结果到一个结果里，跟并行流紧密相关。
+    4.4 对结果容器执行一个可选的最终转换 --Function<A R> finisher() 完成器。将中间类型转换成一个最终的结果类型。
+5. Collectors还提供了一套特性值，比如CONCURRENT,这些特性值在汇聚的时候提供了一些更好性能。
+6. 使用一个Collector的一个串行的实现，将会使用supplier函数创建一个单个的结果容器，然后针对每个输入元素只会调用accumulator函数一次。
+一个并行的实现，将会对输入元素进行分区，然后针对每个分区，创建一个结果容器，累积（accumulator）每个分区内的元素到该分区的子结果中，然后使用合并器函数（combiner）
+合并这些子结果到一个合并的结果里--可能是一个新的结果，也可能是将一个结果里的元素加入到另一个结果里。
+7. 为了确保串行执行和并行执行，能得到一个等价的结果，收集器必须满足同一性（identity）和结合性（associativity）两个条件
+    7.1 identity:同一性约束是说对于每个部分累积结果，与一个空的结果容器合并后必须生成一个等价的结果。也就是说，针对于每个部分累积的结果a，a必须等价于combiner.applay(a, supplier.get());
+    7.2 associativity:结合性约束表示分割计算必须得到一个等价的结果。也就是说，对于任何一个输入元素t1和t2，在下面的计算中必须等到r1==r2
+     *     A a1 = supplier.get();
+     *     accumulator.accept(a1, t1);
+     *     accumulator.accept(a1, t2);
+     *     R r1 = finisher.apply(a1);  // result without splitting
+     *
+     *     A a2 = supplier.get();
+     *     accumulator.accept(a2, t1);
+     *     A a3 = supplier.get();
+     *     accumulator.accept(a3, t2);
+     *     R r2 = finisher.apply(combiner.apply(a2, a3));  // result with splitting
+
+8. 对于没有UNORDERED这个特性值的收集器来说，如果finisher.apply(a1).equals(finisher.apply(a2))，那么这两个累积的结果a1与a2是等价的。
+而，对于无序的收集器来说，这种等价性是放松的，会考虑到这种顺序上的不同的不相等性。
+9. 基于Collector来实现汇聚操作的这些库，比如Stream#collect(Collector),必须遵守如下这些约定：
+    9.1 传递给accumulator()函数的第一个参数，和传递给combiner()函数的两个参数，以及传递给finisher()函数的参数，必须是supplier()函数，accumulator()函数，combiner()函数上一次调用的结果。
+    9.2 实现不应该对supplier()，accumulator(), combiner()函数的结果做任何操作，除了将它们传递给accumulator(), combiner(),finisher()函数，或者直接返回给汇聚操作的调用者。
+    9.3 如果一个结果被传递给combiner()，或者finisher()函数，但是相同类型的对象并没有从这些函数中返回，那么该结果再也不会被使用了。
+    9.4 一旦一个结果被传递给combiner(),或者finisher()函数，那么它将不会再被传递给accumulator()函数了。
+    9.5 对于非并发的收集器，从supplier()，accumulator()或者combiner()函数所返回来的任何的结果必须是针对当前线程的。这样可以使收集以并行的方式去处理，而无须实现额外的同步操作。
+        汇聚操作的实现必须管理输入被适当的分区，也就是说，分区被处理在一个独立的环境下。在累积完成之后再去合并。
+    9.6 对于并发的收集器，并发的实现汇聚是不强求的。一个并发的汇聚操作是说，累加器函数accumulator()可以被多个线程去调用，使用相同的可以并发修改的结果容器，而不需要保持结果独立性在累加的过程中。
+        一个并发的汇聚操作，应该仅仅被应用于，如果收集器有UNORDERED特性值，或者原始数据是无序的。
+
+10. 除了在Collectors里预定义的实现之外，静态工厂方法Collector.of(Supplier, BiConsumer, BinaryOperator, Characteristics...)也可以被使用于创建收集器，比如：
+    Collector<Widget, ?, TreeSet<Widget>> intoSet = Collector.of(TreeSet::new, TreeSet::add, (left, right) -> { left.addAll(right); return left; });
+
+11. 收集器的特性值：
+    11.1 CONCURRENT:表示这个收集器时并发的，意思是，在多个线程间对于同一个结果容器能够支持累加器accumulator函数并发的被调用，此处跟并行流的区别：每个并行流（parallelStream）
+         都有自己的一个结果容器，最后通过combiner函数将多个并行流的多个线程的中间结果容器合并到一起。而，CONCURRENT特性表示同一个结果容器可以由多个线程来调用。如果一个收集器支持CONCURRENT,但
+         不支持UNORDERED的，如果被应用到一个无序的数据源上，那么它仅仅支持并发的求值。所以CONCURRENT和UNORDERED一般都搭配使用。
+    11.2 UNORDERED:表示收集操作并不承诺保留遇到的输入元素的顺序。
+    11.3 IDENTITY_FINISH:表示finisher函数就是identity函数，并且可以被省略掉，如果设置了，必须要满足由A->R的类型转换必须是成功的。
+

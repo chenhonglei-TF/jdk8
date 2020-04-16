@@ -1,0 +1,5 @@
+.idea/
+.gradle/
+out/
+src/main/resources/
+src/test/
